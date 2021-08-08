@@ -35,7 +35,7 @@ describe("escrow-anchor", () => {
   const mintAuthority = anchor.web3.Keypair.generate();
 
   it("Initialize testing state", async () => {
-    // Airdropping tokens to Alice. Need synchronous confirmation so that funds lands before
+    // Airdropping SOL to Alice. Need synchronous confirmation so that funds lands before
     // moving on in the program.
     await provider.connection.confirmTransaction(
       await provider.connection.requestAirdrop(alice.publicKey, 10000000000)
@@ -112,17 +112,20 @@ describe("escrow-anchor", () => {
       );
 
     // Init the escrow token account
-    const initialEscrowAmountX = 5;
+    const aliceEscrowedAmountX = 5;
+    const aliceExpectedAmountY = 10;
     await program.rpc.initializeEscrow(
       escrowBump,
       tokenBump,
-      new anchor.BN(initialEscrowAmountX),
+      new anchor.BN(aliceEscrowedAmountX),
+      new anchor.BN(aliceExpectedAmountY),
       {
         accounts: {
-          authority: alice.publicKey,
-          escrowAccount: escrowPda,
-          tokenxEscrowAccount: tokenPda,
-          tokenxMint: mintX.publicKey,
+          initializer: alice.publicKey,
+          initializerTokenAccount: aliceTokenAccountX.publicKey,
+          escrowStateAccount: escrowPda,
+          escrowTokenAccount: tokenPda,
+          tokenMint: mintX.publicKey,
           systemProgram: anchor.web3.SystemProgram.programId,
           rent: anchor.web3.SYSVAR_RENT_PUBKEY,
           tokenProgram: TOKEN_PROGRAM_ID,

@@ -5,6 +5,6 @@ use anchor_lang::prelude::*;
 pub struct Escrow {
     pub is_initialized: bool,
     pub initializer: Pubkey,
-    pub escrow_token_account: Pubkey,
-    pub expected_amount: u64,
+    // pub escrow_token_account: Pubkey,
+    pub taker_amount: u64,
 }
