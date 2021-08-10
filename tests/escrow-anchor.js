@@ -24,15 +24,23 @@ describe("escrow-anchor", () => {
   let aliceTokenAccountY = null;
   let bobTokenAccountX = null;
   let bobTokenAccountY = null;
-  let escrowPda = null;
 
-  const aliceInitialBalance = 1000;
-  const bobInitialBalance = 500;
+  const aliceInitialBalanceX = 1000;
+  const aliceInitialBalanceY = 0;
+  const bobInitialBalanceX = 0;
+  const bobInitialBalanceY = 500;
 
-  const escrow = anchor.web3.Keypair.generate();
+  const aliceEscrowedAmountX = 5;
+  const aliceExpectedAmountY = 10;
+
+  // const escrow = anchor.web3.Keypair.generate();
   const alice = anchor.web3.Keypair.generate();
   const bob = anchor.web3.Keypair.generate();
   const mintAuthority = anchor.web3.Keypair.generate();
+
+  let [escrowPda, escrowBump] = [null, null];
+  let [escrowStatePda, escrowStateBump] = [null, null];
+  let [escrowTokenPda, escrowTokenBump] = [null, null];
 
   it("Initialize testing state", async () => {
     // Airdropping SOL to Alice. Need synchronous confirmation so that funds lands before
@@ -76,7 +84,7 @@ describe("escrow-anchor", () => {
       aliceTokenAccountX,
       mintAuthority.publicKey,
       [mintAuthority],
-      aliceInitialBalance
+      aliceInitialBalanceX
     );
 
     // Mint starting Y balance to Bob
@@ -84,47 +92,56 @@ describe("escrow-anchor", () => {
       bobTokenAccountY,
       mintAuthority.publicKey,
       [mintAuthority],
-      bobInitialBalance
+      bobInitialBalanceY
     );
 
     // Get balances from token program
     let _aliceATokenAccountX = await mintX.getAccountInfo(aliceTokenAccountX);
     let _bobATokenAccountY = await mintY.getAccountInfo(bobTokenAccountY);
 
-    assert.ok(_aliceATokenAccountX.amount.toNumber() == aliceInitialBalance);
-    assert.ok(_bobATokenAccountY.amount.toNumber() == bobInitialBalance);
+    assert.ok(_aliceATokenAccountX.amount.toNumber() == aliceInitialBalanceX);
+    assert.ok(_bobATokenAccountY.amount.toNumber() == bobInitialBalanceY);
   });
 
   it("Initialize escrow", async () => {
-    const [escrowPda, escrowBump] =
+    // PDAs for escrow program, escrow state and token accounts
+    [escrowPda, escrowBump] =
+    await anchor.web3.PublicKey.findProgramAddress(
+      [Buffer.from(anchor.utils.bytes.utf8.encode("escrow"))],
+      program.programId
+    );
+
+    [escrowStatePda, escrowStateBump] =
       await anchor.web3.PublicKey.findProgramAddress(
         [
-          Buffer.from(anchor.utils.bytes.utf8.encode("escrow-metadata")),
+          Buffer.from(anchor.utils.bytes.utf8.encode("escrow-state")),
           alice.publicKey.toBuffer(),
+          mintX.publicKey.toBuffer(),
         ],
         program.programId
       );
 
-    const [tokenPda, tokenBump] =
+    [escrowTokenPda, escrowTokenBump] =
       await anchor.web3.PublicKey.findProgramAddress(
         [Buffer.from(anchor.utils.bytes.utf8.encode("escrow-token"))],
         program.programId
       );
 
     // Init the escrow token account
-    const aliceEscrowedAmountX = 5;
-    const aliceExpectedAmountY = 10;
     await program.rpc.initializeEscrow(
       escrowBump,
-      tokenBump,
+      escrowStateBump,
+      escrowTokenBump,
       new anchor.BN(aliceEscrowedAmountX),
       new anchor.BN(aliceExpectedAmountY),
       {
         accounts: {
           initializer: alice.publicKey,
-          initializerTokenAccount: aliceTokenAccountX.publicKey,
-          escrowStateAccount: escrowPda,
-          escrowTokenAccount: tokenPda,
+          initializerTokenAccountSend: aliceTokenAccountX,
+          initializerTokenAccountReceive: aliceTokenAccountY,
+          escrowAccount: escrowPda,
+          escrowStateAccount: escrowStatePda,
+          escrowTokenAccount: escrowTokenPda,
           tokenMint: mintX.publicKey,
           systemProgram: anchor.web3.SystemProgram.programId,
           rent: anchor.web3.SYSVAR_RENT_PUBKEY,
@@ -133,32 +150,81 @@ describe("escrow-anchor", () => {
         signers: [alice],
       }
     );
-
-    // const ESCROW_LAYOUT = BufferLayout.struct([
-    //   BufferLayout.bool(),
-    //   BufferLayout.blob(32),
-    //   BufferLayout.blob(32),
-    //   BufferLayout.u64(),
-    // ]);
-    // console.log(ESCROW_LAYOUT.decode(escrowAccount.data));
-
-    const escrowAccountInfo = await provider.connection.getAccountInfo(
-      escrowPda
+    
+    const escrowAccount = await provider.connection.getAccountInfo(escrowPda);
+    const escrowStateAccount = await program.account.escrow.fetch(
+      escrowStatePda
     );
-    const escrowAccount = await program.account.escrow.fetch(escrowPda);
-    const tokenAccount = await mintX.getAccountInfo(tokenPda);
-    console.log(escrowAccount);
-    console.log(tokenAccount);
-    assert.ok(escrowAccount.initializer.equals(alice.publicKey));
-    assert.ok(escrowAccount.isInitialized);
-    // assert.ok(escrowAccount.receive_amount.toNumber() === initialEscrowAmountX);
-    // console.log(escrowAccountInfo.owner);
-    // console.log(program.provider.wallet.publicKey);
-    // assert.ok(
-    //   escrowAccountInfo.owner.equals(program.provider.wallet.publicKey)
-    // );
+    const escrowTokenAccount = await mintX.getAccountInfo(escrowTokenPda);
 
-    assert.ok(tokenAccount.mint.equals(mintX.publicKey));
-    // assert.ok(account.amount.toNumber() === 0);
+    assert.ok(escrowStateAccount.isInitialized);
+    assert.ok(escrowStateAccount.initializer.equals(alice.publicKey));
+    assert.ok(
+      escrowStateAccount.initializerTokenAccountReceive.equals(
+        aliceTokenAccountY
+      )
+    );
+    assert.ok(escrowStateAccount.escrowTokenAccount.equals(escrowTokenPda));
+    assert.ok(
+      escrowStateAccount.initializerAmount.toNumber() === aliceEscrowedAmountX
+    );
+    assert.ok(
+      escrowStateAccount.takerAmount.toNumber() === aliceExpectedAmountY
+    );
+
+    assert.ok(escrowTokenAccount.address.equals(escrowTokenPda));
+    assert.ok(escrowTokenAccount.mint.equals(mintX.publicKey));
+    assert.ok(escrowTokenAccount.amount.toNumber() === aliceEscrowedAmountX);
+  });
+
+  it("Take escrow", async () => {
+    // Init the escrow token account
+    const BobEscrowedAmountY = aliceExpectedAmountY;
+    const BobExpectedAmountX = aliceEscrowedAmountX;
+    await program.rpc.takeEscrow(
+      new anchor.BN(BobExpectedAmountX),
+      new anchor.BN(BobEscrowedAmountY),
+      {
+        accounts: {
+          taker: bob.publicKey,
+          takerTokenAccountSend: bobTokenAccountY,
+          takerTokenAccountReceive: bobTokenAccountX,
+          initializer: alice.publicKey,
+          initializerTokenAccountReceive: aliceTokenAccountY,
+          escrowAccount: escrowPda,
+          escrowStateAccount: escrowStatePda,
+          escrowTokenAccount: escrowTokenPda,
+          systemProgram: anchor.web3.SystemProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        },
+        signers: [bob],
+      }
+    );
+
+    let _aliceTokenAccountX = await mintX.getAccountInfo(aliceTokenAccountX);
+    let _aliceTokenAccountY = await mintY.getAccountInfo(aliceTokenAccountY);
+    let _bobTokenAccountX = await mintX.getAccountInfo(bobTokenAccountX);
+    let _bobTokenAccountY = await mintY.getAccountInfo(bobTokenAccountY);
+
+    // const escrowTokenAccount = await mintX.getAccountInfo(escrowTokenPda);
+    // console.log(escrowTokenAccount);
+    assert.ok(
+      _aliceTokenAccountX.amount.toNumber() ===
+        aliceInitialBalanceX - aliceEscrowedAmountX
+    );
+    assert.ok(
+      _aliceTokenAccountY.amount.toNumber() ===
+        aliceInitialBalanceY + aliceExpectedAmountY
+    );
+    assert.ok(
+      _bobTokenAccountX.amount.toNumber() ===
+        bobInitialBalanceX + aliceEscrowedAmountX
+    );
+    assert.ok(
+      _bobTokenAccountY.amount.toNumber() ===
+        bobInitialBalanceY - aliceExpectedAmountY
+    );
+
+    // Todo: check PDA state acct closed
   });
 });
